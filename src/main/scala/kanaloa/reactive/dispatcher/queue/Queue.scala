@@ -16,6 +16,37 @@ import scala.annotation.tailrec
 import scala.collection.immutable.{Queue ⇒ ScalaQueue}
 import scala.concurrent.duration._
 
+object DispatchDuration {
+
+  def apply(dispatchHistory: Vector[DispatchHistoryEntry]): Option[Duration] = {
+    //only take into account latest busy queue history
+    val relevantHistory = dispatchHistory.takeRightWhile(_.allWorkerOccupied)
+    if (relevantHistory.length >= 2) {
+      val duration = relevantHistory.head.time.until(relevantHistory.last.time)
+      val totalDispatched = relevantHistory.map(_.dispatched).sum
+      Some(little(totalDispatched, duration))
+    } else None
+  }
+
+  def little(dispatched: Int, duration: FiniteDuration) = {
+    val denom = Math.max(1, dispatched)
+    val result = duration / denom
+    println(s"${duration.toSeconds} s / $denom dispatched = ${result}")
+    result
+  }
+}
+
+private[queue] case class DispatchHistoryEntry(
+  dispatched:     Int,
+  queueLength:    Int,
+  waitingWorkers: Int,
+  time:           LocalDateTime
+) {
+  def aggregate(that: DispatchHistoryEntry) = copy(dispatched = dispatched + that.dispatched)
+
+  def allWorkerOccupied = queueLength > 0 || waitingWorkers == 0
+}
+
 trait Queue extends Actor with ActorLogging with MessageScheduler {
   def dispatchHistorySettings: DispatchHistorySettings
   def defaultWorkSettings: WorkSettings
@@ -264,12 +295,6 @@ object Queue {
     }
 
     lazy val currentQueueLength = dispatchHistory.lastOption.map(_.queueLength).getOrElse(0)
-  }
-
-  private[queue] case class DispatchHistoryEntry(dispatched: Int, queueLength: Int, waitingWorkers: Int, time: LocalDateTime) {
-    def aggregate(that: DispatchHistoryEntry) = copy(dispatched = dispatched + that.dispatched)
-
-    def allWorkerOccupied = queueLength > 0 || waitingWorkers == 0
   }
 
   def ofIterable(
